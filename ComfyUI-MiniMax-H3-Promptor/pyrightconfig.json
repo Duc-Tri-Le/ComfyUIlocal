@@ -1,0 +1,14 @@
+{
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingModuleSource": "none",
+  "ignore": [
+    "**/node_modules",
+    "**/__pycache__"
+  ],
+  "extraPaths": [
+    ".",
+    "py",
+    "d:/code/ComfyUI"
+  ]
+}

@@ -1,0 +1,10 @@
+## Task Type: Image-to-Video (I2V) for Google Flow Veo 3
+
+This is an Image-to-Video task starting from the provided reference frame.
+
+Guidelines:
+- Open directly matching the initial frame's composition, character features, clothing, and atmosphere.
+- Describe continuous physical momentum and narrative progression flowing naturally from the initial pose.
+- Write camera kinematics as a dedicated, independent sentence.
+- If dialogue is included, format strictly as: Character says: "..." (no subtitles)
+- Conclude with Audio:, SFX:, Music:, and Negative: lines.

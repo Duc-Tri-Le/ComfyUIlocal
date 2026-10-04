@@ -1,0 +1,232 @@
+import requests
+import time
+
+from .provider_base import LLMProvider, LLMResponse
+from .utils import log_debug, log_error, log_warning
+
+
+# Request timeout in seconds
+REQUEST_TIMEOUT = 120
+
+# Retry config
+MAX_RETRIES = 1
+RETRY_DELAY = 2.0
+
+
+class OpenAIProvider(LLMProvider):
+    """OpenAI-compatible API provider."""
+
+    def __init__(self, api_base: str, api_key: str = "", model: str = "", disable_thinking: bool = True, unload_after_run: bool = True):
+        super().__init__(api_base=api_base, api_key=api_key, model=model)
+        self.disable_thinking = disable_thinking
+        self.unload_after_run = unload_after_run
+
+    def chat(
+        self,
+        system_prompt: str,
+        user_message: str,
+        base64_images: list[str] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        model: str | None = None,
+    ) -> LLMResponse:
+        """Send a chat completion request to an OpenAI-compatible endpoint."""
+        model_name = self.get_model(model)
+        url = f"{self.api_base}/chat/completions"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Connection": "close",
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        if base64_images and len(base64_images) > 0:
+            if isinstance(base64_images[0], dict):
+                # Interleaved mode
+                user_content = []
+                for item in base64_images:
+                    if "text" in item:
+                        user_content.append({"type": "text", "text": item["text"]})
+                    elif "image" in item:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{item['image']}"}
+                        })
+            else:
+                # Flat legacy mode
+                user_content = [{"type": "text", "text": user_message}]
+                for img_b64 in base64_images:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                    })
+        else:
+            user_content = user_message
+
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        # Explicitly disable reasoning/thinking tokens on compatible endpoints to avoid timeout & token budget waste
+        api_host = self.api_base.lower()
+        model_lower = str(model_name or "").lower()
+        is_thinking_model = any(marker in model_lower for marker in (
+            "qwen3", "deepseek", "glm-4.5", "glm-4.6", "glm-4.7", "glm-5", "hunyuan", "r1", "reasoner"
+        ))
+        if self.disable_thinking and ("siliconflow" in api_host or is_thinking_model):
+            payload["enable_thinking"] = False
+
+        log_debug(f"OpenAI request → {url} | model={model_name} | temp={temperature}")
+
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=REQUEST_TIMEOUT,
+                )
+
+                err_text = response.text
+                hint = ""
+                err_lower = err_text.lower()
+                if any(k in err_lower for k in ["context", "exceed", "slot", "out of memory", "kv cache", "failed to decode"]):
+                    hint = " (Hint: Local LLM context window exceeded or slot unavailable. Try launching llama-server with higher context like '-c 8192 -ngl 99')."
+
+                # Handle HTTP errors
+                if response.status_code == 401 or response.status_code == 403:
+                    return LLMResponse(
+                        error=f"Authentication failed (HTTP {response.status_code}). "
+                              f"Please check your API key in config.json.",
+                        model=model_name,
+                    )
+
+                if response.status_code == 429:
+                    error_body = response.json().get("error", {})
+                    retry_after = error_body.get("message", "Rate limit exceeded")
+                    return LLMResponse(
+                        error=f"Rate limited: {retry_after}",
+                        model=model_name,
+                    )
+
+                if response.status_code >= 500:
+                    if attempt < MAX_RETRIES:
+                        log_warning(
+                            f"Server error {response.status_code}, "
+                            f"retrying in {RETRY_DELAY}s..."
+                        )
+                        time.sleep(RETRY_DELAY)
+                        continue
+                    return LLMResponse(
+                        error=f"Server error (HTTP {response.status_code}) after retries: {err_text[:200]}{hint}",
+                        model=model_name,
+                    )
+
+                if not response.ok:
+                    return LLMResponse(
+                        error=f"HTTP {response.status_code}: {err_text[:200]}{hint}",
+                        model=model_name,
+                    )
+
+                # Parse successful response
+                data = response.json()
+                choices = data.get("choices", [])
+                if not choices:
+                    return LLMResponse(
+                        error="No choices in API response.",
+                        model=model_name,
+                    )
+
+                content = choices[0].get("message", {}).get("content", "")
+                usage = data.get("usage", {})
+
+                log_debug(
+                    f"OpenAI response ← {len(content)} chars | "
+                    f"tokens: {usage.get('total_tokens', '?')}"
+                )
+
+                return LLMResponse(
+                    content=content,
+                    model=data.get("model", model_name),
+                    usage=usage,
+                )
+
+            except requests.exceptions.Timeout:
+                if attempt < MAX_RETRIES:
+                    log_warning(f"Request timed out, retrying in {RETRY_DELAY}s...")
+                    time.sleep(RETRY_DELAY)
+                    continue
+                return LLMResponse(
+                    error=f"Request timed out after {REQUEST_TIMEOUT}s.",
+                    model=model_name,
+                )
+
+            except requests.exceptions.ConnectionError:
+                return LLMResponse(
+                    error=f"Cannot connect to {self.api_base}. "
+                          f"Please check your API base URL.",
+                    model=model_name,
+                )
+
+            except Exception as e:
+                return LLMResponse(
+                    error=f"Unexpected error: {str(e)}",
+                    model=model_name,
+                )
+
+        return LLMResponse(error="Max retries exceeded.", model=model_name)
+
+    def is_available(self) -> bool:
+        """Check if the OpenAI endpoint is reachable."""
+        try:
+            # Attempt a lightweight request (list models)
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            response = requests.get(
+                f"{self.api_base}/models",
+                headers=headers,
+                timeout=10,
+            )
+            return response.ok
+        except Exception:
+            return False
+
+    def unload(self, model: str | None = None) -> None:
+        """Attempt to unload model if endpoint is a local engine (e.g. LM Studio / llama.cpp)."""
+        if not getattr(self, "unload_after_run", True):
+            return
+
+        api_lower = str(self.api_base or "").lower()
+        if not any(h in api_lower for h in ("localhost", "127.0.0.1", "192.168.", "10.0.", ":1234", ":8080")):
+            return
+
+        model_name = self.get_model(model)
+        base_clean = api_lower.rstrip("/")
+        host_base = base_clean[:-3] if base_clean.endswith("/v1") else base_clean
+
+        endpoints = [
+            f"{host_base}/api/v0/models/unload",
+            f"{base_clean}/models/unload",
+        ]
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        for ep in endpoints:
+            try:
+                payload = {"model": model_name} if model_name else {}
+                resp = requests.post(ep, json=payload, headers=headers, timeout=2)
+                if resp.ok:
+                    log_debug(f"Local OpenAI-compatible model unloaded via {ep}")
+                    return
+            except Exception:
+                pass
