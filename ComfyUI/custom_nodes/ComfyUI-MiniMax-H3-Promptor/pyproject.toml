@@ -1,0 +1,27 @@
+[project]
+name = "ComfyUI-Flow-Veo3"
+description = "ComfyUI custom node suite for Google Flow Veo 3 AI Director cinematic prompt generation, multimodal analysis, and video generation."
+version = "2.0.0"
+
+dependencies = ["requests>=2.28.0"]
+
+[project.urls]
+Repository = "https://github.com/1038lab/ComfyUI-Flow-Veo3"
+
+[tool.comfy]
+PublisherId = "ailab"
+DisplayName = "ComfyUI-Flow-Veo3"
+Icon = ""
+
+[tool.pyrefly]
+search-path = [
+    ".",
+    "py",
+]
+python-version = "3.10"
+preset = "basic"
+
+[tool.pyrefly.errors]
+missing-import = "ignore"
+
+
