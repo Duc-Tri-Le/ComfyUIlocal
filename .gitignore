@@ -40,6 +40,4 @@ ComfyUI/models/unet/*
 Thumbs.db
 Desktop.ini
 
-# Custom node sensitive config (API keys)
-ComfyUI/custom_nodes/ComfyUI-MiniMax-H3-Promptor/config.json
 
