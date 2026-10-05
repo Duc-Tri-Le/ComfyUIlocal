@@ -1,9 +1,0 @@
-## Task Type: Text-to-Video (T2V) for Google Flow Veo 3
-
-This is a Text-to-Video generation task building the entire visual narrative and audio soundscape from text.
-
-Guidelines:
-- Establish the scene setting, subject, lighting, and action with vivid sensory detail.
-- Camera movement MUST be written as its own separate sentence.
-- If dialogue is included, format strictly as: Character says: "..." (no subtitles)
-- Conclude with Audio:, SFX:, Music:, and Negative: lines.
